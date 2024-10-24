@@ -12,7 +12,7 @@ import (
 )
 
 // ClientHandler 客户端 HTTP 处理器
-func ClientHandler(clientAddr string) {
+func (c *Config) ClientHandler() {
 	e := echo.New()
 	e.POST("/task", func(c echo.Context) error {
 		body, _ := io.ReadAll(c.Request().Body)
@@ -25,6 +25,7 @@ func ClientHandler(clientAddr string) {
 
 	e.GET("/progress", func(c echo.Context) error {
 		// 假设下载完成后设置进度为 true
+		// 根据下载的文件大小，对比源文件大小，判断是否下载完成
 		progress := true
 		return c.JSON(http.StatusOK, progress)
 	})
@@ -33,15 +34,14 @@ func ClientHandler(clientAddr string) {
 		segmentPath := "segment_0_0" // 假设只有一个分段文件
 		segmentFile, err := os.Open(segmentPath)
 		if err != nil {
-			log.Printf("Error opening segment file: %v", err)
+			log.Printf("Error opening segment file : %v", err)
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		defer segmentFile.Close()
 		return c.Stream(http.StatusOK, "application/octet-stream", segmentFile)
 	})
-	if err := e.Start(clientAddr); err != nil {
-		log.Fatalf("Error starting client: %v", err)
-	}
+	fmt.Println("客户端已启动，监听地址为:", c.Addr)
+	log.Fatal(e.Start(":" + c.Addr))
 }
 
 // 客户端接收任务并下载分段文件

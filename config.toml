@@ -1,0 +1,5 @@
+Server = false
+Client = false
+Addr = "9999"
+Url = ""
+List = ""

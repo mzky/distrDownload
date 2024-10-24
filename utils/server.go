@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -15,10 +16,11 @@ import (
 )
 
 // SplitAndSendTasks 服务端分段文件并发送任务
-func SplitAndSendTasks(filePath string, clientCount int, clients []string) (map[string]string, error) {
-	resp, err := http.Head(filePath)
+func (c *Config) SplitAndSendTasks() (string, map[string]string, error) {
+	clientCount := len(c.Clients)
+	resp, err := http.Head(c.Url)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 
@@ -36,26 +38,25 @@ func SplitAndSendTasks(filePath string, clientCount int, clients []string) (map[
 			filename = params["filename"]
 		}
 	} else {
-		filename = filepath.Clean(filePath)
+		filename = filepath.Clean(c.Url)
 	}
 
 	tasks := make(map[string]string)
-	tasks["filename"] = filename
 	for i := 0; i < clientCount; i++ {
 		start := int64(i) * segmentSize
 		end := start + segmentSize - 1
 		if i == clientCount-1 {
 			end = fileSize - 1
 		}
-		tasks[clients[i]] = fmt.Sprintf("http://%s/download?path=%s&start=%d&end=%d", filePath, clients[i], start, end)
+		tasks[c.Clients[i]] = fmt.Sprintf("http://%s/download?path=%s&start=%d&end=%d", c.Url, c.Clients[i], start, end)
 	}
 
-	return tasks, nil
+	return filename, tasks, nil
 }
 
 // SendTaskToClient 发送任务给客户端
-func SendTaskToClient(client string, task string) error {
-	resp, err := http.Post(fmt.Sprintf("http://%s/task", client), "application/json", strings.NewReader(task))
+func SendTaskToClient(clientUrl, task string) error {
+	resp, err := http.Post(fmt.Sprintf("http://%s/task", clientUrl), "application/json", strings.NewReader(task))
 	if err != nil {
 		return err
 	}
@@ -64,11 +65,11 @@ func SendTaskToClient(client string, task string) error {
 }
 
 // MonitorClientProgress 服务端探测客户端下载进度
-func MonitorClientProgress(clients []string) error {
+func (c *Config) MonitorClientProgress() error {
 	var wg sync.WaitGroup
 	progress := make(map[string]bool)
 
-	for _, client := range clients {
+	for _, client := range c.Clients {
 		wg.Add(1)
 		go func(client string) {
 			defer wg.Done()
@@ -103,9 +104,9 @@ func MonitorClientProgress(clients []string) error {
 }
 
 // FetchSegmentsFromClients 服务端抓取客户端分段文件
-func FetchSegmentsFromClients(clients []string) ([]string, error) {
-	segments := make([]string, len(clients))
-	for i, client := range clients {
+func (c *Config) FetchSegmentsFromClients() ([]string, error) {
+	segments := make([]string, len(c.Clients))
+	for i, client := range c.Clients {
 		resp, err := http.Get(fmt.Sprintf("http://%s/segment", client))
 		if err != nil {
 			return nil, err
@@ -130,24 +131,44 @@ func FetchSegmentsFromClients(clients []string) ([]string, error) {
 }
 
 // MergeSegments 服务端合并分段文件
-func MergeSegments(segments []string, outputPath string) error {
+func (c *Config) MergeSegments() {
+	outputPath, tasks, err := c.SplitAndSendTasks()
+	if err != nil {
+		log.Fatalf("Error splitting and sending tasks: %v", err)
+	}
+
+	for clientUrl, task := range tasks {
+		if e := SendTaskToClient(clientUrl, task); e != nil {
+			log.Fatalf("Error sending task to %s: %v", clientUrl, e)
+		}
+	}
+
+	if e := c.MonitorClientProgress(); e != nil {
+		log.Fatalf("Error monitoring client progress: %v", err)
+	}
+
+	segments, err := c.FetchSegmentsFromClients()
+	if err != nil {
+		log.Fatalf("Error fetching segments from clients: %v", err)
+	}
+
 	outputFile, err := os.Create(outputPath)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 	defer outputFile.Close()
 
 	for _, segmentPath := range segments {
-		segmentFile, err := os.Open(segmentPath)
-		if err != nil {
-			return err
+		segmentFile, e := os.Open(segmentPath)
+		if e != nil {
+			log.Fatal(e)
 		}
 
 		if _, err = io.Copy(outputFile, segmentFile); err != nil {
-			return err
+			log.Fatal(err)
 		}
 		segmentFile.Close()
 	}
 
-	return nil
+	fmt.Println("文件下载成功:", outputFile)
 }

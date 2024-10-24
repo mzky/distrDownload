@@ -3,6 +3,7 @@ module distrDownload
 go 1.20
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/gookit/goutil v0.6.17
 	github.com/labstack/echo/v4 v4.12.0
 )

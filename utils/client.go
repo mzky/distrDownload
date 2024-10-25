@@ -24,7 +24,7 @@ func (c *Config) ClientHandler() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.DownloadSegment(jsonRes)
+			DownloadSegment(jsonRes)
 		}()
 		return e.NoContent(http.StatusOK)
 	})
@@ -75,8 +75,8 @@ func (c *Config) ClientHandler() {
 }
 
 // DownloadSegment 客户端接收任务并下载分段文件
-func (c *Config) DownloadSegment(jsonRes JsonRes) {
-	req, err := http.NewRequest("GET", c.Url, nil)
+func DownloadSegment(jsonRes JsonRes) {
+	req, err := http.NewRequest("GET", jsonRes.Url, nil)
 	if err != nil {
 		log.Printf("探测下载文件异常: %v", err)
 		return
@@ -85,13 +85,13 @@ func (c *Config) DownloadSegment(jsonRes JsonRes) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("下载文件 %s 异常: %v", c.Url, err)
+		log.Printf("下载文件 %s 异常: %v", jsonRes.Url, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		log.Printf("下载文件 %s 状态码错误: %d", c.Url, resp.StatusCode)
+		log.Printf("下载文件 %s 状态码错误: %d", jsonRes.Url, resp.StatusCode)
 		return
 	}
 

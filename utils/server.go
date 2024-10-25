@@ -196,6 +196,9 @@ func (c *Config) FetchSegmentsFromClients(client string, marshal []byte) {
 
 // MergeSegments 服务端合并分段文件
 func (c *Config) MergeSegments() {
+	if c.Url == "" {
+		log.Fatal("未设置下载地址")
+	}
 	tasks, err := c.SplitAndSendTasks()
 	if err != nil {
 		log.Fatalf("文件分段异常: %v", err)

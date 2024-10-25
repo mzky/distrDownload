@@ -2,7 +2,6 @@ package utils
 
 import (
 	"github.com/BurntSushi/toml"
-	"log"
 	"os"
 	"strings"
 )
@@ -39,9 +38,6 @@ func (c *Config) LoadConfig() {
 	}
 	if c.Url == "" {
 		c.Url = config.Url
-		if c.Url == "" {
-			log.Fatal("未设置下载地址")
-		}
 	}
 	if c.List != "" {
 		c.Clients = strings.Split(c.List, ",")

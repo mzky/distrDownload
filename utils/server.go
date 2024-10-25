@@ -89,8 +89,7 @@ func (c *Config) SendTaskToClient(clientUrl string, task JsonRes) {
 	resp, err := http.Post(fmt.Sprintf("http://%s:%s/task", clientUrl, c.Addr),
 		"application/json", bytes.NewBuffer(marshal))
 	if err != nil {
-		log.Printf("发送任务给客户端失败: %v", err)
-		return
+		log.Fatalf("发送任务给客户端 %s 失败: %v", clientUrl, err)
 	}
 	defer resp.Body.Close()
 	c.MonitorClientProgress(clientUrl, marshal)

@@ -2,47 +2,46 @@ package utils
 
 import (
 	"github.com/BurntSushi/toml"
+	"log"
 	"os"
 	"strings"
 )
 
 type Config struct {
-	Server  bool
-	Client  bool
-	Addr    string
-	Url     string
-	List    string
-	Clients []string
+	Server   bool
+	Client   bool
+	Addr     string
+	Url      string
+	List     string
+	Clients  []string
+	CfgFile  string
+	FileName string
 }
 
-var cfg = "config.toml"
-
-func initConfig() *Config {
-	if _, err := os.Stat(cfg); err != nil {
-		create, _ := os.Create(cfg)
+func (c *Config) initConfig() *Config {
+	if _, err := os.Stat(c.CfgFile); err != nil {
+		create, _ := os.Create(c.CfgFile)
 		create.Close()
 	}
-	file, err := os.ReadFile(cfg)
+	file, err := os.ReadFile(c.CfgFile)
 	if err != nil {
-		return &Config{}
+		return c
 	}
-	var config Config
+	var config *Config
 	_ = toml.Unmarshal(file, &config)
-	return &config
+	return config
 }
+
 func (c *Config) LoadConfig() {
-	config := initConfig()
-	if c.Server {
-		c.Server = config.Server
-	}
-	if c.Client {
-		c.Client = config.Client
-	}
+	config := c.initConfig()
 	if c.List == "" {
 		c.List = config.List
 	}
 	if c.Url == "" {
 		c.Url = config.Url
+		if c.Url == "" {
+			log.Fatal("未设置下载地址")
+		}
 	}
 	if c.List != "" {
 		c.Clients = strings.Split(c.List, ",")
@@ -51,5 +50,5 @@ func (c *Config) LoadConfig() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(cfg, marshal, 0644)
+	_ = os.WriteFile(c.CfgFile, marshal, 0644)
 }

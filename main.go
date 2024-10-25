@@ -17,11 +17,12 @@ func main() {
 	c.StringVar(&opts.Addr, "port", "9999", "设置客户端监控端口;;p")
 	c.StringVar(&opts.Url, "url", "", "设置下载文件地址;;u")
 	c.StringVar(&opts.List, "list", "", "客户端列表,以逗号分隔;;l")
+	c.StringVar(&opts.CfgFile, "cfgfile", "config.toml", "客户端列表,以逗号分隔;;f")
 	_ = c.Parse(nil)
 	opts.LoadConfig()
 
 	if opts.Server == opts.Client {
-		log.Fatal("服务端和客户端选择其中一种模式")
+		log.Fatal("服务端和客户端需选择其中一种模式")
 	}
 
 	if opts.Client {

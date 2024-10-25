@@ -1,5 +1,8 @@
-Server = false
+Server = true
 Client = false
 Addr = "9999"
-Url = ""
-List = ""
+Url = "https://go.p2hp.com/dl/go1.17.3.src.tar.gz"
+List = "192.168.0.100,192.168.0.99,192.168.0.101"
+Clients = ["192.168.0.100", "192.168.0.99", "192.168.0.101"]
+CfgFile = "config.toml"
+FileName = ""

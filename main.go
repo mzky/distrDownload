@@ -18,6 +18,7 @@ func main() {
 	c.StringVar(&opts.Url, "url", "", "设置下载文件地址;;u")
 	c.StringVar(&opts.List, "list", "", "客户端列表,以逗号分隔;;l")
 	c.StringVar(&opts.CfgFile, "cfgfile", "config.toml", "客户端列表,以逗号分隔;;f")
+	c.StringVar(&opts.OutputPath, "outputPath", "./temp", "下载文件存放目录;;o")
 	_ = c.Parse(nil)
 	opts.LoadConfig()
 

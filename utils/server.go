@@ -33,11 +33,12 @@ type ProgressRes struct {
 
 const (
 	pollInterval = 1 * time.Second
+	maxRetries   = 3               // 最大重试次数
+	retryDelay   = 1 * time.Second // 重试间隔时间
 )
 
 // SplitAndSendTasks 服务端分段文件并发送任务
-func (c *Config) SplitAndSendTasks() (map[string]JsonRes, error) {
-	clientCount := len(c.Clients)
+func (c *Config) SplitAndSendTasks() (chan JsonRes, error) {
 	resp, err := http.Head(c.Url)
 	if err != nil {
 		return nil, err
@@ -50,10 +51,7 @@ func (c *Config) SplitAndSendTasks() (map[string]JsonRes, error) {
 	if err != nil {
 		return nil, fmt.Errorf("无法解析文件大小: %w", err)
 	}
-	segmentSize := jr.FileSize / int64(clientCount)
-	if jr.FileSize%int64(clientCount) != 0 {
-		segmentSize++
-	}
+	segmentSize := int64(4 * 1024 * 1024) // 4M
 
 	// 从响应头中获取 Content-Disposition
 	_, params, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
@@ -66,21 +64,30 @@ func (c *Config) SplitAndSendTasks() (map[string]JsonRes, error) {
 	c.FileName = jr.Filename
 	jr.Url = c.Url
 
-	tasks := make(map[string]JsonRes)
-	for i := 0; i < clientCount; i++ {
-		jr.Start = int64(i) * segmentSize
-		jr.End = jr.Start + segmentSize - 1
-		if i == clientCount-1 {
-			jr.End = jr.FileSize - 1
+	taskQueue := make(chan JsonRes, jr.FileSize/segmentSize+1)
+	go func() {
+		for start := int64(0); start < jr.FileSize; start += segmentSize {
+			end := start + segmentSize - 1
+			if end >= jr.FileSize {
+				end = jr.FileSize - 1
+			}
+			task := JsonRes{
+				Url:      jr.Url,
+				Start:    start,
+				End:      end,
+				Filename: jr.Filename,
+				FileSize: jr.FileSize,
+			}
+			taskQueue <- task
 		}
-		tasks[c.Clients[i]] = jr
-	}
+		close(taskQueue)
+	}()
 
-	return tasks, nil
+	return taskQueue, nil
 }
 
 // SendTaskToClient 发送任务给客户端
-func (c *Config) SendTaskToClient(clientUrl string, task JsonRes) {
+func (c *Config) SendTaskToClient(clientUrl string, task JsonRes, taskQueue chan JsonRes) {
 	marshal, err := json.Marshal(task)
 	if err != nil {
 		log.Printf("任务序列化失败: %v", err)
@@ -92,16 +99,16 @@ func (c *Config) SendTaskToClient(clientUrl string, task JsonRes) {
 		log.Fatalf("发送任务给客户端 %s 失败: %v", clientUrl, err)
 	}
 	defer resp.Body.Close()
-	c.MonitorClientProgress(clientUrl, marshal)
+	c.MonitorClientProgress(clientUrl, marshal, taskQueue)
 }
 
 // MonitorClientProgress 服务端探测客户端下载进度
-func (c *Config) MonitorClientProgress(client string, marshal []byte) {
+func (c *Config) MonitorClientProgress(client string, marshal []byte, taskQueue chan JsonRes) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex // 用于并发安全的打印
 	beginTime := time.Now().Unix()
 	wg.Add(1)
-	go func(client string, c *Config, marshal []byte) {
+	go func(client string, c *Config, marshal []byte, taskQueue chan JsonRes) {
 		defer wg.Done()
 
 		for {
@@ -129,12 +136,16 @@ func (c *Config) MonitorClientProgress(client string, marshal []byte) {
 
 			if result.Status == "done" {
 				c.FetchSegmentsFromClients(client, marshal)
+				if len(taskQueue) > 0 {
+					newTask := <-taskQueue
+					c.SendTaskToClient(client, newTask, taskQueue)
+				}
 				break
 			}
 
 			time.Sleep(pollInterval)
 		}
-	}(client, c, marshal)
+	}(client, c, marshal, taskQueue)
 	wg.Wait()
 	endTime := time.Now().Unix()
 	t := endTime - beginTime
@@ -149,44 +160,50 @@ func (c *Config) MonitorClientProgress(client string, marshal []byte) {
 
 // FetchSegmentsFromClients 服务端抓取客户端分段文件
 func (c *Config) FetchSegmentsFromClients(client string, marshal []byte) {
-	resp, err := http.Post(fmt.Sprintf("http://%s:%s/segment", client, c.Addr),
-		"application/json", bytes.NewBuffer(marshal))
-	if err != nil {
-		log.Printf("请求客户端文件失败 %s: %v", client, err)
-		return
-	}
-	defer resp.Body.Close()
-	// 检查响应状态码
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("请求失败，状态码: %d\n", resp.StatusCode)
-		return
-	}
-
 	var jsonRes JsonRes
 	if err := json.Unmarshal(marshal, &jsonRes); err != nil {
 		log.Printf("任务反序列化失败: %v", err)
 		return
 	}
 
-	_, params, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
-	fileName := params["filename"]
-	if fileName == "" {
-		fmt.Println("无法获取文件名")
-		return
-	}
-
 	// 创建文件
+	fileName := fmt.Sprintf(SegmentFileName, jsonRes.Filename, jsonRes.Start, jsonRes.End)
 	file, err := os.Create(fileName)
 	if err != nil {
-		fmt.Println("创建文件失败:", err)
+		log.Printf("创建文件失败: %v", err)
 		return
 	}
 	defer file.Close()
 
+	// 下载分段文件
+	req, err := http.NewRequest("GET", jsonRes.Url, nil)
+	if err != nil {
+		log.Printf("创建请求失败: %v", err)
+		return
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", jsonRes.Start, jsonRes.End))
+
+	var resp *http.Response
+	var retries int
+	for retries = 0; retries < maxRetries; retries++ {
+		resp, err = http.DefaultClient.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		log.Printf("下载文件 %s 异常: %v, 重试次数: %d", jsonRes.Url, err, retries+1)
+		time.Sleep(retryDelay)
+	}
+
+	if err != nil || resp.StatusCode != http.StatusOK {
+		log.Printf("下载文件 %s 失败, 达到最大重试次数: %d", jsonRes.Url, maxRetries)
+		return
+	}
+	defer resp.Body.Close()
+
 	// 将响应体写入文件
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
-		fmt.Println("写入文件失败:", err)
+		log.Printf("写入文件失败: %v", err)
 		return
 	}
 
@@ -198,17 +215,19 @@ func (c *Config) MergeSegments() {
 	if c.Url == "" {
 		log.Fatal("未设置下载地址")
 	}
-	tasks, err := c.SplitAndSendTasks()
+	taskQueue, err := c.SplitAndSendTasks()
 	if err != nil {
 		log.Fatalf("文件分段异常: %v", err)
 	}
+
 	var wg sync.WaitGroup
-	for clientUrl, task := range tasks {
+	for _, clientUrl := range c.Clients {
 		wg.Add(1)
-		go func(url string, t JsonRes) {
+		go func(url string, taskQueue chan JsonRes) {
 			defer wg.Done()
-			c.SendTaskToClient(url, t)
-		}(clientUrl, task)
+			task := <-taskQueue
+			c.SendTaskToClient(url, task, taskQueue)
+		}(clientUrl, taskQueue)
 	}
 
 	// 检查文件是否存在，避免覆盖已有文件
@@ -223,8 +242,10 @@ func (c *Config) MergeSegments() {
 	defer outputFile.Close()
 	// 等待 c.SendTaskToClient 执行完毕，再进行文件合并
 	wg.Wait()
-	for _, task := range tasks {
-		segmentFilePath := fmt.Sprintf("%s_%d_%d", task.Filename, task.Start, task.End)
+
+	// 从任务队列中逐个处理任务
+	for task := range taskQueue {
+		segmentFilePath := fmt.Sprintf(SegmentFileName, task.Filename, task.Start, task.End)
 		segmentFile, err := os.Open(segmentFilePath)
 		if err != nil {
 			log.Fatalf("打开分段文件失败: %v", err)
